@@ -30,7 +30,7 @@ def clear_address():
 def app():
     st.title("🚚 Logística de Pedidos 1800")
 
-    # --- API Key ---
+    # API Key
     api_key = (
         st.secrets.get("GOOGLE_API_KEY")
         or st.secrets.get("GOOGLE_MAPS_API_KEY")
@@ -42,7 +42,7 @@ def app():
         st.stop()
     gmaps = googlemaps.Client(key=api_key)
 
-    # --- Carga datos ---
+    # Datos
     df, lat_c, lon_c, prov_c, cant_c = cargar_datos()
     map_kml_urls = {
         "Logistica Quito":        "https://www.google.com/maps/d/kml?mid=1VM9PYAfefV4hQRk-Ew6vBmBWKc6ol9U",
@@ -55,9 +55,14 @@ def app():
         "Azuay - Cuenca":     (-2.90055,  -79.00408)
     }
 
-    # --- Sidebar ---
+    # Estado previo
+    coords_cliente = st.session_state.get("coords_cliente", None)
+
+    # Sidebar
     with st.sidebar:
         st.header("🔧 Filtros de Ubicación")
+
+        # Nueva búsqueda
         if st.button("🔄 Nueva búsqueda"):
             for key in [
                 "origen_pdv","transfer_exist","transfer1_pdv",
@@ -73,37 +78,35 @@ def app():
                 return
 
         # Origen PDV
-        opciones_pdvs = sorted(df[df["base o hub"].notna()]["nombre farmacia"].tolist())
+        opciones_pdvs = sorted(df[df["base o hub"].notna()]["nombre farmacia"])
         opciones_pdvs.insert(0, "")
         origen_sel = st.selectbox("🧭 Origen (PDV)", opciones_pdvs, key="origen_pdv")
 
         # Transferencias
         transfer_exist = st.checkbox("¿Existe transferencia intermedia?", key="transfer_exist")
         if transfer_exist:
-            df_trans = df[
-                (df[prov_c] == st.session_state.get("provincia_canton", "Pichincha - Quito").split(" - ")[0]) &
-                (df[cant_c] == st.session_state.get("provincia_canton", "Pichincha - Quito").split(" - ")[1])
-            ]
-            opciones_transf = sorted(df_trans["nombre farmacia"].tolist())
+            prov_can = st.session_state.get("provincia_canton", "Pichincha - Quito")
+            prov_sel, cant_sel = prov_can.split(" - ")
+            df_trans = df[(df[prov_c]==prov_sel)&(df[cant_c]==cant_sel)]
+            opciones_transf = sorted(df_trans["nombre farmacia"])
             opciones_transf.insert(0, "")
             transfer1_sel = st.selectbox("PDV Transferencia 1", opciones_transf, key="transfer1_pdv")
             transfer2_exist = st.checkbox("¿Agregar segunda transferencia?", key="transfer2_exist")
             if transfer2_exist:
                 transfer2_sel = st.selectbox("PDV Transferencia 2", opciones_transf, key="transfer2_pdv")
 
-        # Dirección Cliente
+        # Dirección cliente
         address_input = st.text_input(
             "📌 Dirección del Cliente",
             key="address_input",
             on_change=clear_address
         )
-        coords_cliente = st.session_state.get("coords_cliente", None)
         if address_input and not coords_cliente:
             preds = gmaps.places_autocomplete(address_input, components={"country": "ec"})
             opts = [p["description"] for p in preds]
             if opts:
                 address_sel = st.selectbox("Sugerencias de dirección", opts, key="address_sel")
-                pid = next(p["place_id"] for p in preds if p["description"] == address_sel)
+                pid = next(p["place_id"] for p in preds if p["description"]==address_sel)
                 det = gmaps.place(place_id=pid)
                 loc = det["result"]["geometry"]["location"]
                 coords_cliente = (loc["lat"], loc["lng"])
@@ -132,30 +135,30 @@ def app():
             if st.checkbox(nm, value=True, key=f"map_logistica_{nm.split()[-1]}")
         ]
 
-    # --- Coordenadas de origen/destino/transferencias ---
+    # Coordenadas Origen/Destino/Transferencias
     coords_o = None
     if origen_sel:
-        row_o = df[df["nombre farmacia"] == origen_sel].iloc[0]
+        row_o = df[df["nombre farmacia"]==origen_sel].iloc[0]
         coords_o = (row_o[lat_c], row_o[lon_c])
     coords_d = st.session_state.get("coords_cliente", None)
 
     coords_t1 = None
     if st.session_state.get("transfer_exist") and st.session_state.get("transfer1_pdv"):
-        row = df[df["nombre farmacia"] == st.session_state["transfer1_pdv"]].iloc[0]
+        row = df[df["nombre farmacia"]==st.session_state["transfer1_pdv"]].iloc[0]
         coords_t1 = (row[lat_c], row[lon_c])
     coords_t2 = None
     if st.session_state.get("transfer2_exist") and st.session_state.get("transfer2_pdv"):
-        row = df[df["nombre farmacia"] == st.session_state["transfer2_pdv"]].iloc[0]
+        row = df[df["nombre farmacia"]==st.session_state["transfer2_pdv"]].iloc[0]
         coords_t2 = (row[lat_c], row[lon_c])
 
-    # --- Farmacias cercanas (distancia desde origen) ---
+    # Farmacias cercanas (distancia desde ORIGEN)
     if coords_o and coords_d:
         df_sel = df[(df[prov_c]==prov_sel)&(df[cant_c]==cant_sel)].copy()
         df_sel["distancia_km"] = [
-            geodesic(coords_o, (r[lat_c], r[lon_c])).km
-            for _, r in df_sel.iterrows()
+            geodesic(coords_o, (r[lat_c],r[lon_c])).km
+            for _,r in df_sel.iterrows()
         ]
-        df_sel = df_sel[df_sel["distancia_km"] <= distance_limit].sort_values("distancia_km")
+        df_sel = df_sel[df_sel["distancia_km"]<=distance_limit].sort_values("distancia_km")
         if df_sel.empty:
             st.warning("⚠️ No hay farmacias cercanas.")
         else:
@@ -183,7 +186,7 @@ def app():
             })
             st.dataframe(df_show, height=200, use_container_width=True)
 
-    # --- Calcular ruta y segmentar distancias ---
+    # Cálculo y segmentación de rutas
     waypoints = []
     if coords_t1:
         waypoints.append(f"{coords_t1[0]},{coords_t1[1]}")
@@ -193,7 +196,6 @@ def app():
     route_js = ""
     bounds_js = ""
     if coords_o and coords_d:
-        # Solicitud a Directions API
         if waypoints:
             ruta = gmaps.directions(
                 origin=f"{coords_o[0]},{coords_o[1]}",
@@ -207,38 +209,26 @@ def app():
                 destination=f"{coords_d[0]},{coords_d[1]}",
                 mode="driving"
             )
-        # Segmentación de distancias
         if ruta:
             legs = ruta[0]["legs"]
-            dist_vals = [leg["distance"]["value"] for leg in legs]
-            dist_total_km = sum(dist_vals) / 1000
-            dist_total_text = f"{dist_total_km:.2f} km"
-            num_t = len(waypoints)
-            if num_t > 0:
-                dist_trans_km = sum(dist_vals[:num_t]) / 1000
-                dist_trans_text = f"{dist_trans_km:.2f} km"
-            else:
-                dist_trans_text = dist_total_text
-            # Mostrar con tamaño 150%
+            vals = [leg["distance"]["value"] for leg in legs]
+            total_km = sum(vals)/1000
+            total_txt = f"{total_km:.2f} km"
+            n = len(waypoints)
+            part_km = sum(vals[:n])/1000 if n>0 else total_km
+            part_txt = f"{part_km:.2f} km"
             st.markdown(
-                f"<div style='font-size:150%;'>"
-                f"<strong>Distancia origen → cliente:</strong> {dist_total_text} &nbsp;&nbsp;"
-                f"<strong>Origen → último PDV transf.:</strong> {dist_trans_text}"
+                f"<div style='font-size:150%'>"
+                f"<strong>Distancia origen → cliente:</strong> {total_txt}&nbsp;&nbsp;"
+                f"<strong>Origen → último PDV transf.:</strong> {part_txt}"
                 f"</div>",
                 unsafe_allow_html=True
             )
-            # Preparar polyline
-            encoded_pl = json.dumps(ruta[0]["overview_polyline"]["points"])
+            enc = json.dumps(ruta[0]["overview_polyline"]["points"])
             route_js = f"""
-              const decoded = google.maps.geometry.encoding.decodePath({encoded_pl});
-              new google.maps.Polyline({{
-                path: decoded,
-                geodesic: true,
-                strokeColor: "#FF0000",
-                strokeWeight: 4
-              }}).setMap(map);
+              const dec = google.maps.geometry.encoding.decodePath({enc});
+              new google.maps.Polyline({{ path: dec, geodesic: true, strokeColor:"#F00", strokeWeight:4 }}).setMap(map);
             """
-            # Ajustar viewport
             bounds_js = f"""
               const b = new google.maps.LatLngBounds();
               b.extend(new google.maps.LatLng({coords_o[0]},{coords_o[1]}));
@@ -246,28 +236,27 @@ def app():
               map.fitBounds(b);
             """
 
-    # --- Centro y zoom para el mapa ---
+    # Centro y zoom
     if coords_d:
         cx, cy = coords_d
     elif coords_o:
         cx, cy = coords_o
     else:
         cx, cy = city_coords[prov_can]
-    zoom = 15 if distance_limit <=1 else (14 if distance_limit<=2.5 else (13 if distance_limit<=5 else 12))
+    zoom = 15 if distance_limit<=1 else (14 if distance_limit<=2.5 else (13 if distance_limit<=5 else 12))
 
-    # --- Preparar hubs/origin para JS ---
-    hubs = df[df["base o hub"].notna()][[lat_c, lon_c]].to_dict(orient="records")
-    hubs_js = json.dumps([{"lat": h[lat_c], "lng": h[lon_c]} for h in hubs])
-    origin_js = json.dumps({"lat": cx, "lng": cy}) if coords_o else "null"
+    # Preparar hubs y origen para JS
+    hubs_js = json.dumps([{"lat":h[lat_c],"lng":h[lon_c]} for _,h in df[df["base o hub"].notna()].iterrows()])
+    origin_js = json.dumps({"lat":coords_o[0],"lng":coords_o[1]}) if coords_o else "null"
 
-    # --- Construir capas KML ---
+    # KML layers
     kml_js = ""
     for nm in selected_logistica:
         kml_js += f"new google.maps.KmlLayer({{url:'{map_kml_urls[nm]}',map:map,preserveViewport:true}});"
     if pdv_nacional:
         kml_js += f"new google.maps.KmlLayer({{url:'{map_kml_urls['Ubicacion PDV Nacional']}',map:map,preserveViewport:true}});"
 
-    # --- HTML + JS del mapa ---
+    # Construir HTML/JS
     map_html = f"""
     <div id="map" style="height:650px;width:100%;"></div>
     <script>
@@ -275,56 +264,46 @@ def app():
         const map = new google.maps.Map(document.getElementById("map"), {{
           center: {{lat:{cx},lng:{cy}}}, zoom:{zoom}
         }});
-        // Hubs (no clickable)
+        // Hubs
         const hubs = {hubs_js};
         hubs.forEach(pt => new google.maps.Marker({{
-          position: pt, map,
-          clickable: false,
-          icon: {{
-            url:'http://maps.google.com/mapfiles/ms/icons/blue-dot.png',
-            scaledSize:new google.maps.Size(32,32)
-          }}
+          position: pt, map, clickable:false,
+          icon:{{url:'http://maps.google.com/mapfiles/ms/icons/blue-dot.png', scaledSize:new google.maps.Size(32,32)}} 
         }}));
-        // Origen (no clickable, 64×64)
+        // Origen
         const origin = {origin_js};
         if(origin && origin.lat) new google.maps.Marker({{
-          position: origin, map, clickable: false,
-          icon: {{
-            url:'http://maps.google.com/mapfiles/ms/icons/red-dot.png',
-            scaledSize:new google.maps.Size(64,64)
-          }}
-        }});
-        // Ruta
+          position: origin, map, clickable:false,
+          icon:{{url:'http://maps.google.com/mapfiles/ms/icons/red-dot.png', scaledSize:new google.maps.Size(64,64)}} 
+        }});        
+        // Ruta vial
         {route_js}
         // Bounds
         {bounds_js}
-        // Cliente draggable (clicable, 64×64)
-        var marker = new google.maps.Marker({{
-          position:{{lat:{cx},lng:{cy}}},map,draggable:true,
-          icon: {{
-            url:'http://maps.google.com/mapfiles/ms/icons/green-dot.png',
-            scaledSize:new google.maps.Size(64,64)
-          }}
-        }});
+        // Cliente sólo si existe coords
+        {"" if not coords_cliente else """
+        var marker = new google.maps.Marker({
+          position: {lat:%f,lng:%f}, map, draggable:true,
+          icon:{url:'http://maps.google.com/mapfiles/ms/icons/green-dot.png',scaledSize:new google.maps.Size(64,64)}
+        });
         var geocoder = new google.maps.Geocoder();
-        marker.addListener('dragend',function(){{
+        marker.addListener('dragend', function(){
           var pos = marker.getPosition();
-          geocoder.geocode({{location:pos}},function(results,status){{
-            if(status==='OK'&&results[0])window.parent.postMessage(
-              {{newAddress:results[0].formatted_address,lat:pos.lat(),lng:pos.lng()}},
-              '*'
+          geocoder.geocode({location:pos}, function(results,status){
+            if(status==='OK' && results[0]) window.parent.postMessage(
+              {newAddress: results[0].formatted_address, lat:pos.lat(), lng:pos.lng()}, '*'
             );
-          }});
-        }});
+          });
+        });
+        """ % (cx, cy)}
         // KML layers
         {kml_js}
       }}
     </script>
-    <script async defer
-      src="https://maps.googleapis.com/maps/api/js?key={api_key}&libraries=geometry,places&callback=initMap">
-    </script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key={api_key}&libraries=geometry,places&callback=initMap"></script>
     """
     components.html(map_html, height=650)
 
 if __name__=="__main__":
     app()
+
